@@ -41,10 +41,31 @@ jobs:
           mkdir -p package-input/lib
           cp SINE/dist/SINE.jar package-input/
           cp SINE/lib/*.jar package-input/lib/
-          test -f package-input/SINE.jar
-          test -n "$(find package-input/lib -name '*.jar' -print -quit)"
+          python3 - <<'PY'
+          from pathlib import Path
+          jars = sorted(Path("package-input/lib").glob("*.jar"))
+          value = " ".join("lib/" + p.name for p in jars)
+          # Manifest continuation lines begin with one space and are limited to 70 bytes.
+          lines = []
+          current = "Class-Path: "
+          for token in value.split(" "):
+              piece = token if current.endswith(" ") else " " + token
+              if len((current + piece).encode("utf-8")) > 70:
+                  lines.append(current)
+                  current = " " + token
+              else:
+                  current += piece
+          lines.append(current)
+          Path("package-input/MANIFEST.MF").write_text(
+              "Manifest-Version: 1.0\nMain-Class: com.dosse.bwentrain.player.Main\n"
+              + "\n".join(lines) + "\n\n",
+              encoding="utf-8")
+          PY
+          jar --update --file package-input/SINE.jar --manifest package-input/MANIFEST.MF
+          rm package-input/MANIFEST.MF
           echo "Application JARs:"
           find package-input -name '*.jar' -type f -print
+          unzip -p package-input/SINE.jar META-INF/MANIFEST.MF
 
       - name: Package as macOS app with bundled Java runtime
         run: |
@@ -55,7 +76,6 @@ jobs:
             --name SINE \
             --main-jar SINE.jar \
             --main-class com.dosse.bwentrain.player.Main \
-            --class-path "lib/*" \
             --icon _SETUP/Mac/icon.icns \
             --app-version 1.8.8 \
             --mac-package-identifier com.dosse.bwentrain.player \
@@ -69,8 +89,8 @@ jobs:
           file build/package/SINE.app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib
           test -d build/package/SINE.app/Contents/app/lib
           test "$(find build/package/SINE.app/Contents/app/lib -name '*.jar' | wc -l | tr -d ' ')" -ge 1
-          cat build/package/SINE.app/Contents/app/SINE.cfg
-          grep -F 'lib/*' build/package/SINE.app/Contents/app/SINE.cfg
+          unzip -p build/package/SINE.app/Contents/app/SINE.jar META-INF/MANIFEST.MF
+          grep -F 'Class-Path: lib/' <(unzip -p build/package/SINE.app/Contents/app/SINE.jar META-INF/MANIFEST.MF)
 
       - name: Create ZIP archive
         run: |
