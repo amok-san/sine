@@ -1,0 +1,107 @@
+name: Build SINE Editor for Apple Silicon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "SINE-Editor/**"
+      - ".github/workflows/build-editor-macos-arm64.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build SINE Editor.app (macOS arm64)
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up ARM64 Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          architecture: aarch64
+
+      - name: Install Apache Ant
+        run: |
+          brew install ant
+          ant -version
+          java -version
+          uname -m
+
+      - name: Build SINE Editor JAR
+        run: ant -f SINE-Editor/build.xml clean jar
+
+      - name: Assemble editor and dependency JARs
+        run: |
+          mkdir -p package-input/lib
+          cp SINE-Editor/dist/SINE-Editor.jar package-input/
+          cp SINE-Editor/lib/*.jar package-input/lib/
+          python3 - <<'PY'
+          from pathlib import Path
+          jars = sorted(Path("package-input/lib").glob("*.jar"))
+          value = " ".join("lib/" + p.name for p in jars)
+          lines = []
+          current = "Class-Path: "
+          for token in value.split(" "):
+              piece = token if current.endswith(" ") else " " + token
+              if len((current + piece).encode("utf-8")) > 70:
+                  lines.append(current)
+                  current = " " + token
+              else:
+                  current += piece
+          lines.append(current)
+          Path("package-input/MANIFEST.MF").write_text(
+              "Manifest-Version: 1.0\nMain-Class: com.dosse.bwentrain.editor.Main\n"
+              + "\n".join(lines) + "\n\n",
+              encoding="utf-8")
+          PY
+          jar --update --file package-input/SINE-Editor.jar --manifest package-input/MANIFEST.MF
+          rm package-input/MANIFEST.MF
+          echo "Editor dependency JARs:"
+          find package-input -name '*.jar' -type f -print
+          unzip -p package-input/SINE-Editor.jar META-INF/MANIFEST.MF
+
+      - name: Package as macOS app with bundled Java runtime
+        run: |
+          jpackage \
+            --type app-image \
+            --input package-input \
+            --dest build/package \
+            --name "SINE Editor" \
+            --main-jar SINE-Editor.jar \
+            --main-class com.dosse.bwentrain.editor.Main \
+            --icon _SETUP/Mac/iconeditor.icns \
+            --app-version 1.8.8 \
+            --mac-package-identifier com.dosse.bwentrain.editor \
+            --java-options "-XX:+TieredCompilation" \
+            --java-options "-Dsun.java2d.dpiaware=true" \
+            --java-options "-Dsun.java2d.noddraw=true"
+
+      - name: Verify app architecture and dependencies
+        run: |
+          test -d "build/package/SINE Editor.app"
+          file "build/package/SINE Editor.app/Contents/MacOS/SINE Editor"
+          file "build/package/SINE Editor.app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib"
+          test -d "build/package/SINE Editor.app/Contents/app/lib"
+          test "$(find "build/package/SINE Editor.app/Contents/app/lib" -name '*.jar' | wc -l | tr -d ' ')" -ge 1
+          unzip -p "build/package/SINE Editor.app/Contents/app/SINE-Editor.jar" META-INF/MANIFEST.MF
+          grep -F 'Class-Path: lib/' <(unzip -p "build/package/SINE Editor.app/Contents/app/SINE-Editor.jar" META-INF/MANIFEST.MF)
+
+      - name: Create ZIP archive
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/package/SINE Editor.app" SINE-Editor-macOS-arm64.zip
+          ls -lh SINE-Editor-macOS-arm64.zip
+
+      - name: Upload editor artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SINE-Editor-macOS-arm64
+          path: SINE-Editor-macOS-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
