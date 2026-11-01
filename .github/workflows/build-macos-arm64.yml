@@ -33,38 +33,44 @@ jobs:
           java -version
           uname -m
 
-      - name: Build SINE JAR and dependencies
+      - name: Build SINE JAR
         run: ant -f SINE/build.xml clean jar
 
-      - name: Verify build output
+      - name: Assemble application and dependency JARs
         run: |
-          test -f SINE/dist/SINE.jar
-          echo "Build output:"
-          find SINE/dist -maxdepth 2 -type f -print
+          mkdir -p package-input/lib
+          cp SINE/dist/SINE.jar package-input/
+          cp SINE/lib/*.jar package-input/lib/
+          test -f package-input/SINE.jar
+          test -n "$(find package-input/lib -name '*.jar' -print -quit)"
+          echo "Application JARs:"
+          find package-input -name '*.jar' -type f -print
 
       - name: Package as macOS app with bundled Java runtime
         run: |
-          mkdir -p build/package
           jpackage \
             --type app-image \
-            --input SINE/dist \
+            --input package-input \
             --dest build/package \
             --name SINE \
             --main-jar SINE.jar \
             --main-class com.dosse.bwentrain.player.Main \
+            --class-path "lib/*" \
             --icon _SETUP/Mac/icon.icns \
             --app-version 1.8.8 \
             --mac-package-identifier com.dosse.bwentrain.player \
-            --java-options "-Dsun.java2d.dpiaware=true"
+            --java-options "-Dsun.java2d.dpiaware=true" \
+            --java-options "-Dsun.java2d.noddraw=true"
 
-      - name: Verify ARM64 app and runtime
+      - name: Verify app architecture and dependencies
         run: |
           test -d build/package/SINE.app
-          echo "App executable:"
           file build/package/SINE.app/Contents/MacOS/SINE
-          echo "Bundled Java runtime:"
-          find build/package/SINE.app -name libjvm.dylib -exec file {} \;
-          find build/package/SINE.app -name libjvm.dylib | grep -q .
+          file build/package/SINE.app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib
+          test -d build/package/SINE.app/Contents/app/lib
+          test "$(find build/package/SINE.app/Contents/app/lib -name '*.jar' | wc -l | tr -d ' ')" -ge 1
+          cat build/package/SINE.app/Contents/app/SINE.cfg
+          grep -F 'lib/*' build/package/SINE.app/Contents/app/SINE.cfg
 
       - name: Create ZIP archive
         run: |
