@@ -1,0 +1,81 @@
+name: Build SINE for Apple Silicon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "SINE/**"
+      - ".github/workflows/build-macos-arm64.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build SINE.app (macOS arm64)
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up ARM64 Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          architecture: aarch64
+
+      - name: Install Apache Ant
+        run: |
+          brew install ant
+          ant -version
+          java -version
+          uname -m
+
+      - name: Build SINE JAR and dependencies
+        run: ant -f SINE/build.xml clean jar
+
+      - name: Verify build output
+        run: |
+          test -f SINE/dist/SINE.jar
+          echo "Build output:"
+          find SINE/dist -maxdepth 2 -type f -print
+
+      - name: Package as macOS app with bundled Java runtime
+        run: |
+          mkdir -p build/package
+          jpackage \
+            --type app-image \
+            --input SINE/dist \
+            --dest build/package \
+            --name SINE \
+            --main-jar SINE.jar \
+            --main-class com.dosse.bwentrain.player.Main \
+            --icon _SETUP/Mac/icon.icns \
+            --app-version 1.8.8 \
+            --mac-package-identifier com.dosse.bwentrain.player \
+            --java-options "-Dsun.java2d.dpiaware=true"
+
+      - name: Verify ARM64 app and runtime
+        run: |
+          test -d build/package/SINE.app
+          echo "App executable:"
+          file build/package/SINE.app/Contents/MacOS/SINE
+          echo "Bundled Java runtime:"
+          find build/package/SINE.app -name libjvm.dylib -exec file {} \;
+          find build/package/SINE.app -name libjvm.dylib | grep -q .
+
+      - name: Create ZIP archive
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/package/SINE.app SINE-macOS-arm64.zip
+          ls -lh SINE-macOS-arm64.zip
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SINE-macOS-arm64
+          path: SINE-macOS-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
